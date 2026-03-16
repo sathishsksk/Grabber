@@ -1,0 +1,17 @@
+# IMPORTANT: Never commit sessions to GitHub!
+sessions.json
+*.session
+*.session-journal
+
+# Environment
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Downloads
+downloads/
+/tmp/
