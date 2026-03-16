@@ -86,8 +86,13 @@ def is_allowed(uid: int) -> bool:
     return uid in ALLOWED_USERS
 
 
+# NEW — safe
 def allowed_filter(_, __, msg: Message):
-    return is_allowed(msg.from_user.id if msg.from_user else 0)
+    if not msg.from_user:
+        return False
+    if not ALLOWED_USERS:
+        return True   # no restriction set → allow all
+    return msg.from_user.id in ALLOWED_USERS
 
 allowed = filters.create(allowed_filter)
 
