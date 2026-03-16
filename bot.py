@@ -32,28 +32,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-```
-
-Push → redeploy → send `/start` to the bot → check logs.
-
----
-
-## Two Possible Results
-
-**If you see `✅ GOT MESSAGE` in logs** → the full bot.py has a bug I need to fix. Send me the log.
-
-**If you still see nothing** → Telegram isn't delivering updates at all. Do these checks:
-
-**Check 1** — Go to [@BotFather](https://t.me/BotFather) → `/mybots` → `@Grabber_skbot` → **Bot Settings** → **Group Privacy** → make sure it says **Disabled** (not enabled).
-
-**Check 2** — Open the bot in Telegram and check if there's a **START** button visible. Click it — don't just type `/start`.
-
-**Check 3** — Test the bot token directly in your browser:
-```
-https://api.telegram.org/bot<YOUR_BOT_TOKEN>/getMe
-```
-If this returns your bot info, the token is valid.
-
-**Check 4** — Check if another app is using the same token:
-```
-https://api.telegram.org/bot<YOUR_BOT_TOKEN>/getUpdates
