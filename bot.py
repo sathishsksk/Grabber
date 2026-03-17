@@ -530,7 +530,7 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         status = await update.message.reply_text("⏳  Sending OTP…")
         try:
             uc = Client(f"user_{uid}", api_id=API_ID, api_hash=API_HASH, in_memory=True)
-            await uc.connect()
+            await uc.start()   # start() instead of connect() — keeps session alive
             sent = await uc.send_code(text)
             sess.set_state(uid, {
                 "step": "otp", "phone": text,
@@ -554,9 +554,14 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         phone      = state["phone"]
         phone_hash = state["phone_code_hash"]
 
-        # Always create a fresh client — avoids PHONE_CODE_EXPIRED from disconnected client
-        uc = Client(f"user_{uid}", api_id=API_ID, api_hash=API_HASH, in_memory=True)
-        await uc.connect()
+        # MUST reuse original client — phone_code_hash is tied to its auth key
+        # Just reconnect it if disconnected
+        uc = state["client"]
+        try:
+            if not uc.is_connected:
+                await uc.connect()
+        except Exception:
+            await uc.connect()
 
         try:
             await uc.sign_in(phone, phone_hash, code)
@@ -576,8 +581,6 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 parse_mode=ParseMode.MARKDOWN,
             )
         except Exception as e:
-            try: await uc.disconnect()
-            except Exception: pass
             sess.clear_state(uid)
             await update.message.reply_text(
                 f"❌  Login failed: `{e}`\n\nTry /login again.",
