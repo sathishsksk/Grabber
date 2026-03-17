@@ -525,16 +525,28 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     if step == "phone":
         if not text.startswith("+"):
-            await update.message.reply_text("❌  Include country code. Example: `+919876543210`", parse_mode=ParseMode.MARKDOWN)
+            await update.message.reply_text(
+                "❌  Include country code.\nExample: `+919876543210`",
+                parse_mode=ParseMode.MARKDOWN,
+            )
             return
         status = await update.message.reply_text("⏳  Sending OTP…")
         try:
+            # Step 1: connect and immediately capture auth key as session string
             uc = Client(f"user_{uid}", api_id=API_ID, api_hash=API_HASH, in_memory=True)
             await uc.connect()
+            # Export session string NOW — this saves the auth key before any disconnect
+            auth_session = await uc.export_session_string()
+            # Step 2: request OTP
             sent = await uc.send_code(text)
+            # Disconnect — we no longer need the live connection
+            await uc.disconnect()
+            # Store session string + hash in state (not the fragile client object)
             sess.set_state(uid, {
-                "step": "otp", "phone": text,
-                "phone_code_hash": sent.phone_code_hash, "client": uc,
+                "step":            "otp",
+                "phone":           text,
+                "phone_code_hash": sent.phone_code_hash,
+                "auth_session":    auth_session,
             })
             await status.edit_text(
                 "📩  *OTP sent to your Telegram!*\n\n"
@@ -546,38 +558,35 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await status.edit_text(f"⚠️  Too many attempts. Wait {e.value}s.")
             sess.clear_state(uid)
         except Exception as e:
-            await status.edit_text(f"❌  Failed to send OTP: `{e}`", parse_mode=ParseMode.MARKDOWN)
+            await status.edit_text(f"❌  Failed: `{e}`", parse_mode=ParseMode.MARKDOWN)
             sess.clear_state(uid)
 
     elif step == "otp":
-        code       = text.replace(" ","")
-        phone      = state["phone"]
-        phone_hash = state["phone_code_hash"]
-        uc         = state["client"]
+        code         = text.replace(" ", "")
+        phone        = state["phone"]
+        phone_hash   = state["phone_code_hash"]
+        auth_session = state["auth_session"]
 
-        # Reconnect same client if disconnected — must reuse same client as send_code
-        try:
-            if not uc.is_connected:
-                await uc.connect()
-        except Exception:
-            try: await uc.connect()
-            except Exception as e:
-                sess.clear_state(uid)
-                await update.message.reply_text(
-                    f"❌  Session lost. Please /login again.",
-                    parse_mode=ParseMode.MARKDOWN,
-                )
-                return
-
+        # Recreate client from saved session string — same auth key, guaranteed
+        uc = Client(
+            f"user_{uid}",
+            api_id=API_ID,
+            api_hash=API_HASH,
+            session_string=auth_session,
+            in_memory=True,
+        )
+        await uc.connect()
         try:
             await uc.sign_in(phone, phone_hash, code)
-            session_str = await uc.export_session_string()
-            sess.save_session(uid, session_str)
+            final_session = await uc.export_session_string()
+            sess.save_session(uid, final_session)
             sess.set_client(uid, uc)
             sess.clear_state(uid)
             me = await uc.get_me()
             await update.message.reply_text(
-                f"✅  *Logged in as {me.first_name}!*\n🎉  Bot can now access your private chats!",
+                f"✅  *Logged in as {me.first_name}!*\n"
+                f"👤  @{me.username or 'N/A'}\n\n"
+                "🎉  Bot can now access all your private chats!",
                 parse_mode=ParseMode.MARKDOWN,
             )
         except SessionPasswordNeeded:
@@ -587,6 +596,8 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 parse_mode=ParseMode.MARKDOWN,
             )
         except Exception as e:
+            try: await uc.disconnect()
+            except Exception: pass
             sess.clear_state(uid)
             await update.message.reply_text(
                 f"❌  Login failed: `{e}`\n\nTry /login again.",
