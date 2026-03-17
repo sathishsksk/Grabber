@@ -537,7 +537,9 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 "phone_code_hash": sent.phone_code_hash, "client": uc,
             })
             await status.edit_text(
-                "📩  *OTP sent!*\n\nSend the code here.\nFormat: `1 2 3 4 5`",
+                "📩  *OTP sent to your Telegram!*\n\n"
+                "⚡  Send the code *immediately* (within 2 min).\n"
+                "Format: `1 2 3 4 5`  or  `12345`",
                 parse_mode=ParseMode.MARKDOWN,
             )
         except FloodWait as e:
@@ -548,10 +550,16 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             sess.clear_state(uid)
 
     elif step == "otp":
-        code, phone = text.replace(" ",""), state["phone"]
-        uc = state["client"]
+        code       = text.replace(" ","")
+        phone      = state["phone"]
+        phone_hash = state["phone_code_hash"]
+
+        # Always create a fresh client — avoids PHONE_CODE_EXPIRED from disconnected client
+        uc = Client(f"user_{uid}", api_id=API_ID, api_hash=API_HASH, in_memory=True)
+        await uc.connect()
+
         try:
-            await uc.sign_in(phone, state["phone_code_hash"], code)
+            await uc.sign_in(phone, phone_hash, code)
             session_str = await uc.export_session_string()
             sess.save_session(uid, session_str)
             sess.set_client(uid, uc)
@@ -563,10 +571,18 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             )
         except SessionPasswordNeeded:
             sess.set_state(uid, {"step": "2fa", "client": uc})
-            await update.message.reply_text("🔐  *2FA Required*\nSend your Telegram 2FA password:", parse_mode=ParseMode.MARKDOWN)
+            await update.message.reply_text(
+                "🔐  *2FA Required*\nSend your Telegram 2FA password:",
+                parse_mode=ParseMode.MARKDOWN,
+            )
         except Exception as e:
-            await update.message.reply_text(f"❌  Wrong OTP: `{e}`\nTry /login again.", parse_mode=ParseMode.MARKDOWN)
+            try: await uc.disconnect()
+            except Exception: pass
             sess.clear_state(uid)
+            await update.message.reply_text(
+                f"❌  Login failed: `{e}`\n\nTry /login again.",
+                parse_mode=ParseMode.MARKDOWN,
+            )
 
     elif step == "2fa":
         uc = state["client"]
