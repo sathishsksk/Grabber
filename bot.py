@@ -49,6 +49,7 @@ ptb = Application.builder().token(BOT_TOKEN).build()
 # ─── Grab sessions ────────────────────────────────────────────────────────────
 grab_sessions: dict[int, dict] = {}
 watched: dict[str, dict] = {}
+login_clients: dict[int, Client] = {}  # stores live pyrogram client during login
 
 # ─── Extension map ────────────────────────────────────────────────────────────
 EXT_MAP = {
@@ -514,7 +515,6 @@ async def cmd_unwatch(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"❌  Error: `{e}`", parse_mode=ParseMode.MARKDOWN)
 
-# ─── Text handler (login flow) ────────────────────────────────────────────────
 async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid   = update.effective_user.id
     state = sess.get_state(uid)
@@ -532,21 +532,16 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             return
         status = await update.message.reply_text("⏳  Sending OTP…")
         try:
-            # Step 1: connect and immediately capture auth key as session string
+            # Create and connect client — keep it ALIVE in global dict
             uc = Client(f"user_{uid}", api_id=API_ID, api_hash=API_HASH, in_memory=True)
             await uc.connect()
-            # Export session string NOW — this saves the auth key before any disconnect
-            auth_session = await uc.export_session_string()
-            # Step 2: request OTP
             sent = await uc.send_code(text)
-            # Disconnect — we no longer need the live connection
-            await uc.disconnect()
-            # Store session string + hash in state (not the fragile client object)
+            # Store live client in global dict — NOT in state (avoids serialization)
+            login_clients[uid] = uc
             sess.set_state(uid, {
                 "step":            "otp",
                 "phone":           text,
                 "phone_code_hash": sent.phone_code_hash,
-                "auth_session":    auth_session,
             })
             await status.edit_text(
                 "📩  *OTP sent to your Telegram!*\n\n"
@@ -562,25 +557,30 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             sess.clear_state(uid)
 
     elif step == "otp":
-        code         = text.replace(" ", "")
-        phone        = state["phone"]
-        phone_hash   = state["phone_code_hash"]
-        auth_session = state["auth_session"]
+        code       = text.replace(" ", "")
+        phone      = state["phone"]
+        phone_hash = state["phone_code_hash"]
 
-        # Recreate client from saved session string — same auth key, guaranteed
-        uc = Client(
-            f"user_{uid}",
-            api_id=API_ID,
-            api_hash=API_HASH,
-            session_string=auth_session,
-            in_memory=True,
-        )
-        await uc.connect()
+        # Get the live client from global dict — same auth key guaranteed
+        uc = login_clients.get(uid)
+        if not uc:
+            sess.clear_state(uid)
+            await update.message.reply_text(
+                "⏰  Session expired. Please /login again.",
+                parse_mode=ParseMode.MARKDOWN,
+            )
+            return
+
+        # Reconnect if dropped
+        if not uc.is_connected:
+            await uc.connect()
+
         try:
             await uc.sign_in(phone, phone_hash, code)
             final_session = await uc.export_session_string()
             sess.save_session(uid, final_session)
             sess.set_client(uid, uc)
+            login_clients.pop(uid, None)
             sess.clear_state(uid)
             me = await uc.get_me()
             await update.message.reply_text(
@@ -590,14 +590,18 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 parse_mode=ParseMode.MARKDOWN,
             )
         except SessionPasswordNeeded:
-            sess.set_state(uid, {"step": "2fa", "client": uc})
+            sess.set_state(uid, {
+                "step": "2fa",
+                "phone": phone,
+                "phone_code_hash": phone_hash,
+            })
+            login_clients[uid] = uc
             await update.message.reply_text(
                 "🔐  *2FA Required*\nSend your Telegram 2FA password:",
                 parse_mode=ParseMode.MARKDOWN,
             )
         except Exception as e:
-            try: await uc.disconnect()
-            except Exception: pass
+            login_clients.pop(uid, None)
             sess.clear_state(uid)
             await update.message.reply_text(
                 f"❌  Login failed: `{e}`\n\nTry /login again.",
@@ -605,12 +609,24 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             )
 
     elif step == "2fa":
-        uc = state["client"]
+        uc = login_clients.get(uid)
+        if not uc:
+            sess.clear_state(uid)
+            await update.message.reply_text(
+                "⏰  Session expired. Please /login again.",
+                parse_mode=ParseMode.MARKDOWN,
+            )
+            return
+
+        if not uc.is_connected:
+            await uc.connect()
+
         try:
             await uc.check_password(text)
-            session_str = await uc.export_session_string()
-            sess.save_session(uid, session_str)
+            final_session = await uc.export_session_string()
+            sess.save_session(uid, final_session)
             sess.set_client(uid, uc)
+            login_clients.pop(uid, None)
             sess.clear_state(uid)
             me = await uc.get_me()
             await update.message.reply_text(
@@ -618,8 +634,12 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 parse_mode=ParseMode.MARKDOWN,
             )
         except Exception as e:
-            await update.message.reply_text(f"❌  Wrong password: `{e}`\nTry /login again.", parse_mode=ParseMode.MARKDOWN)
+            login_clients.pop(uid, None)
             sess.clear_state(uid)
+            await update.message.reply_text(
+                f"❌  Wrong password: `{e}`\nTry /login again.",
+                parse_mode=ParseMode.MARKDOWN,
+            )
 
 # ─── Keep-alive ───────────────────────────────────────────────────────────────
 async def keep_alive():
