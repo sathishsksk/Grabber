@@ -628,26 +628,40 @@ def start_health_server():
     log.info(f"🌐 Health server on :{PORT}")
     server.serve_forever()
 
-# ─── Startup hook ─────────────────────────────────────────────────────────────
-async def on_startup(client: Client):
-    me = await client.get_me()
+# ─── Entry point ──────────────────────────────────────────────────────────────
+async def main():
+    sess.load()
+
+    # Health server in background thread — no event loop conflict
+    t = threading.Thread(target=start_health_server, daemon=True)
+    t.start()
+
+    # Start bot FIRST, then run startup tasks
+    await bot.start()
+
+    me = await bot.get_me()
     log.info(f"🕵️ Grabber Bot started as @{me.username}")
+
     asyncio.create_task(keep_alive())
     await sess.restore_all()
+
     try:
-        await client.send_message(
+        await bot.send_message(
             DUMP_CHANNEL,
-            f"🟢  **Grabber Bot Started!**\n🤖  @{me.username}\n"
+            f"🟢  **Grabber Bot Started!**
+🤖  @{me.username}
+"
             f"🕐  {datetime.now().strftime('%d %b %Y %H:%M')}",
             parse_mode=ParseMode.MARKDOWN,
         )
-    except Exception: pass
+    except Exception:
+        pass
 
-# ─── Entry point ──────────────────────────────────────────────────────────────
+    log.info("✅ Bot ready — waiting for messages...")
+
+    # Keep running forever
+    await asyncio.Event().wait()
+
+
 if __name__ == "__main__":
-    sess.load()
-    # Health server in background thread — Pyrogram owns the event loop
-    t = threading.Thread(target=start_health_server, daemon=True)
-    t.start()
-    # bot.run() is the correct Pyrogram entry point
-    bot.run(on_startup(bot))
+    asyncio.run(main())
