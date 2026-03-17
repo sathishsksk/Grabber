@@ -26,7 +26,7 @@ from pyrogram.errors import (
 import sessions as sess
 from config import (
     API_ID, API_HASH, BOT_TOKEN,
-    DUMP_CHANNEL, PORT, APP_URL, ALLOWED_USERS,
+    DUMP_CHANNEL, PORT, APP_URL, OWNER_ID,
 )
 
 logging.basicConfig(
@@ -76,21 +76,18 @@ MEDIA_ICONS = {
     MessageMediaType.VIDEO_NOTE:("📹","Video Note"),
 }
 
-# ─── Access control ───────────────────────────────────────────────────────────
-def is_allowed(uid: int) -> bool:
-    if not ALLOWED_USERS:
-        return True
-    return uid in ALLOWED_USERS
+# Access control removed — open to all users
 
-def allowed_filter(_, __, msg: Message):
+
+# ─── Owner only filter ────────────────────────────────────────────────────────
+def owner_filter(_, __, msg: Message):
     uid = msg.from_user.id if msg.from_user else 0
-    result = is_allowed(uid)
-    if not result:
-        log.warning(f"🚫 Blocked user {uid}")
-    return result
+    if uid != OWNER_ID:
+        log.warning(f"🚫 Unauthorized user {uid} tried to use bot")
+        return False
+    return True
 
-allowed = filters.create(allowed_filter)
-
+owner_only = filters.create(owner_filter)
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 def get_file_info(msg: Message) -> tuple[str, str, str, int]:
     filename, size = "", 0
@@ -154,7 +151,7 @@ def get_active_client(uid: int) -> Client:
     return bot
 
 # ─── Commands ─────────────────────────────────────────────────────────────────
-@bot.on_message(filters.private & filters.command("start") & allowed)
+@bot.on_message(filters.private & filters.command("start") & owner_only)
 async def cmd_start(client: Client, msg: Message):
     uid    = msg.from_user.id
     logged = sess.is_logged_in(uid)
@@ -179,7 +176,7 @@ async def cmd_start(client: Client, msg: Message):
         parse_mode=ParseMode.MARKDOWN,
     )
 
-@bot.on_message(filters.private & filters.command("help") & allowed)
+@bot.on_message(filters.private & filters.command("help") & owner_only)
 async def cmd_help(client: Client, msg: Message):
     await msg.reply_text(
         "📖  **HOW TO USE**\n\n"
@@ -214,7 +211,7 @@ async def cmd_help(client: Client, msg: Message):
         parse_mode=ParseMode.MARKDOWN,
     )
 
-@bot.on_message(filters.private & filters.command("login") & allowed)
+@bot.on_message(filters.private & filters.command("login") & owner_only)
 async def cmd_login(client: Client, msg: Message):
     uid = msg.from_user.id
     if sess.is_logged_in(uid):
@@ -238,7 +235,7 @@ async def cmd_login(client: Client, msg: Message):
         parse_mode=ParseMode.MARKDOWN,
     )
 
-@bot.on_message(filters.private & filters.command("logout") & allowed)
+@bot.on_message(filters.private & filters.command("logout") & owner_only)
 async def cmd_logout(client: Client, msg: Message):
     uid = msg.from_user.id
     c   = sess.get_client(uid)
@@ -256,7 +253,7 @@ async def cmd_logout(client: Client, msg: Message):
 ALL_COMMANDS = ["start","help","login","logout","search","grab",
                 "watch","unwatch","list","stop","status"]
 
-@bot.on_message(filters.private & ~filters.command(ALL_COMMANDS) & allowed)
+@bot.on_message(filters.private & ~filters.command(ALL_COMMANDS) & owner_only)
 async def handle_login_flow(client: Client, msg: Message):
     uid   = msg.from_user.id
     state = sess.get_state(uid)
@@ -327,7 +324,7 @@ async def handle_login_flow(client: Client, msg: Message):
             await msg.reply_text(f"❌  Wrong password: `{e}`\nTry /login again.", parse_mode=ParseMode.MARKDOWN)
             sess.clear_state(uid)
 
-@bot.on_message(filters.private & filters.command("search") & allowed)
+@bot.on_message(filters.private & filters.command("search") & owner_only)
 async def cmd_search(client: Client, msg: Message):
     args = msg.text.split(None, 1)
     if len(args) < 2:
@@ -398,7 +395,7 @@ async def cmd_search(client: Client, msg: Message):
     except Exception as e:
         await status.edit_text(f"❌  Error: `{e}`", parse_mode=ParseMode.MARKDOWN)
 
-@bot.on_message(filters.private & filters.command("grab") & allowed)
+@bot.on_message(filters.private & filters.command("grab") & owner_only)
 async def cmd_grab(client: Client, msg: Message):
     parts = msg.text.split(None, 2)
     if len(parts) < 2:
@@ -502,7 +499,7 @@ async def cmd_grab(client: Client, msg: Message):
     finally:
         grab_sessions.pop(uid, None)
 
-@bot.on_message(filters.private & filters.command("stop") & allowed)
+@bot.on_message(filters.private & filters.command("stop") & owner_only)
 async def cmd_stop(client: Client, msg: Message):
     uid = msg.from_user.id
     if uid in grab_sessions:
@@ -511,7 +508,7 @@ async def cmd_stop(client: Client, msg: Message):
     else:
         await msg.reply_text("ℹ️  No active grab.")
 
-@bot.on_message(filters.private & filters.command("watch") & allowed)
+@bot.on_message(filters.private & filters.command("watch") & owner_only)
 async def cmd_watch(client: Client, msg: Message):
     parts = msg.text.split(None, 2)
     if len(parts) < 2:
@@ -535,7 +532,7 @@ async def cmd_watch(client: Client, msg: Message):
     except Exception as e:
         await msg.reply_text(f"❌  Error: `{e}`", parse_mode=ParseMode.MARKDOWN)
 
-@bot.on_message(filters.private & filters.command("unwatch") & allowed)
+@bot.on_message(filters.private & filters.command("unwatch") & owner_only)
 async def cmd_unwatch(client: Client, msg: Message):
     parts = msg.text.split(None, 1)
     if len(parts) < 2:
@@ -557,7 +554,7 @@ async def cmd_unwatch(client: Client, msg: Message):
     except Exception as e:
         await msg.reply_text(f"❌  Error: `{e}`", parse_mode=ParseMode.MARKDOWN)
 
-@bot.on_message(filters.private & filters.command("list") & allowed)
+@bot.on_message(filters.private & filters.command("list") & owner_only)
 async def cmd_list(client: Client, msg: Message):
     if not watched:
         await msg.reply_text("📋  Nothing watched.\nUse `/watch @channel`.", parse_mode=ParseMode.MARKDOWN)
@@ -567,7 +564,7 @@ async def cmd_list(client: Client, msg: Message):
         lines.append(f"• **{info['title']}** — `{info['pattern']}`")
     await msg.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
 
-@bot.on_message(filters.private & filters.command("status") & allowed)
+@bot.on_message(filters.private & filters.command("status") & owner_only)
 async def cmd_status(client: Client, msg: Message):
     uid    = msg.from_user.id
     logged = sess.is_logged_in(uid)
