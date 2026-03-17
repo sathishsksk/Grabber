@@ -532,25 +532,16 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             return
         status = await update.message.reply_text("⏳  Sending OTP…")
         try:
-            uc = Client(
-                f"user_{uid}",
-                api_id=API_ID,
-                api_hash=API_HASH,
-                in_memory=True,
-            )
-            # Initialize storage first — fixes "required argument is not an integer"
-            # which happens because dc_id is None on fresh in_memory client
-            await uc.storage.open()
-            await uc.storage.dc_id(2)
-            await uc.storage.api_id(API_ID)
-            await uc.storage.test_mode(False)
+            from telethon import TelegramClient
+            from telethon.sessions import StringSession
+            uc = TelegramClient(StringSession(), API_ID, API_HASH)
             await uc.connect()
-            sent = await uc.send_code(text)
+            result = await uc.send_code_request(text)
             login_clients[uid] = uc
             sess.set_state(uid, {
-                "step":            "otp",
-                "phone":           text,
-                "phone_code_hash": sent.phone_code_hash,
+                "step":       "otp",
+                "phone":      text,
+                "phone_hash": result.phone_code_hash,
             })
             await status.edit_text(
                 "📩  *OTP sent to your Telegram!*\n\n"
@@ -558,32 +549,38 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 "Format: `1 2 3 4 5`  or  `12345`",
                 parse_mode=ParseMode.MARKDOWN,
             )
-        except FloodWait as e:
-            await status.edit_text(f"⚠️  Too many attempts. Wait {e.value}s.")
-            sess.clear_state(uid)
         except Exception as e:
             await status.edit_text(f"❌  Failed: `{e}`", parse_mode=ParseMode.MARKDOWN)
             sess.clear_state(uid)
 
     elif step == "otp":
+        from telethon import TelegramClient
+        from telethon.errors import SessionPasswordNeededError
         code       = text.replace(" ", "")
         phone      = state["phone"]
-        phone_hash = state["phone_code_hash"]
+        phone_hash = state["phone_hash"]
         uc         = login_clients.get(uid)
         if not uc:
             sess.clear_state(uid)
-            await update.message.reply_text(
-                "⏰  Session expired. Please /login again.",
-                parse_mode=ParseMode.MARKDOWN,
-            )
+            await update.message.reply_text("⏰  Session expired. /login again.", parse_mode=ParseMode.MARKDOWN)
             return
-        if not uc.is_connected:
+        if not uc.is_connected():
             await uc.connect()
         try:
-            await uc.sign_in(phone, phone_hash, code)
-            final_session = await uc.export_session_string()
-            sess.save_session(uid, final_session)
-            sess.set_client(uid, uc)
+            await uc.sign_in(phone, code, phone_code_hash=phone_hash)
+            session_str = uc.session.save()
+            sess.save_session(uid, session_str)
+            # Start a Pyrogram client from the Telethon session string for grab/search
+            from pyrogram import Client as PyroClient
+            pyro = PyroClient(
+                f"user_{uid}",
+                api_id=API_ID,
+                api_hash=API_HASH,
+                session_string=session_str,
+                in_memory=True,
+            )
+            await pyro.start()
+            sess.set_client(uid, pyro)
             login_clients.pop(uid, None)
             sess.clear_state(uid)
             me = await uc.get_me()
@@ -593,13 +590,9 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 "🎉  Bot can now access all your private chats!",
                 parse_mode=ParseMode.MARKDOWN,
             )
-        except SessionPasswordNeeded:
+        except SessionPasswordNeededError:
             login_clients[uid] = uc
-            sess.set_state(uid, {
-                "step":            "2fa",
-                "phone":           phone,
-                "phone_code_hash": phone_hash,
-            })
+            sess.set_state(uid, {"step": "2fa", "phone": phone, "phone_hash": phone_hash})
             await update.message.reply_text(
                 "🔐  *2FA Required*\nSend your Telegram 2FA password:",
                 parse_mode=ParseMode.MARKDOWN,
@@ -613,21 +606,28 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             )
 
     elif step == "2fa":
+        from telethon import TelegramClient
         uc = login_clients.get(uid)
         if not uc:
             sess.clear_state(uid)
-            await update.message.reply_text(
-                "⏰  Session expired. Please /login again.",
-                parse_mode=ParseMode.MARKDOWN,
-            )
+            await update.message.reply_text("⏰  Session expired. /login again.", parse_mode=ParseMode.MARKDOWN)
             return
-        if not uc.is_connected:
+        if not uc.is_connected():
             await uc.connect()
         try:
-            await uc.check_password(text)
-            final_session = await uc.export_session_string()
-            sess.save_session(uid, final_session)
-            sess.set_client(uid, uc)
+            await uc.sign_in(password=text)
+            session_str = uc.session.save()
+            sess.save_session(uid, session_str)
+            from pyrogram import Client as PyroClient
+            pyro = PyroClient(
+                f"user_{uid}",
+                api_id=API_ID,
+                api_hash=API_HASH,
+                session_string=session_str,
+                in_memory=True,
+            )
+            await pyro.start()
+            sess.set_client(uid, pyro)
             login_clients.pop(uid, None)
             sess.clear_state(uid)
             me = await uc.get_me()

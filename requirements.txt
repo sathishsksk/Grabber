@@ -1,6 +1,7 @@
 python-telegram-bot==21.6
 pyrogram==2.0.106
 tgcrypto
+telethon
 aiohttp
 aiofiles
 python-dotenv
