@@ -648,11 +648,10 @@ async def main():
     try:
         await bot.send_message(
             DUMP_CHANNEL,
-            f"🟢  **Grabber Bot Started!**
-🤖  @{me.username}
-"
-            f"🕐  {datetime.now().strftime('%d %b %Y %H:%M')}",
-            parse_mode=ParseMode.MARKDOWN,
+            "Started! Bot is running.\n"
+            "Bot started!\n"
+            f"Bot: @{me.username}\n"
+            f"Time: {datetime.now().strftime('%d %b %Y %H:%M')}",
         )
     except Exception:
         pass
