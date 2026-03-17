@@ -530,7 +530,7 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         status = await update.message.reply_text("⏳  Sending OTP…")
         try:
             uc = Client(f"user_{uid}", api_id=API_ID, api_hash=API_HASH, in_memory=True)
-            await uc.start()   # start() instead of connect() — keeps session alive
+            await uc.connect()
             sent = await uc.send_code(text)
             sess.set_state(uid, {
                 "step": "otp", "phone": text,
@@ -538,7 +538,7 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             })
             await status.edit_text(
                 "📩  *OTP sent to your Telegram!*\n\n"
-                "⚡  Send the code *immediately* (within 2 min).\n"
+                "⚡  Send the code *within 2 minutes*.\n"
                 "Format: `1 2 3 4 5`  or  `12345`",
                 parse_mode=ParseMode.MARKDOWN,
             )
@@ -546,22 +546,28 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await status.edit_text(f"⚠️  Too many attempts. Wait {e.value}s.")
             sess.clear_state(uid)
         except Exception as e:
-            await status.edit_text(f"❌  Failed: `{e}`", parse_mode=ParseMode.MARKDOWN)
+            await status.edit_text(f"❌  Failed to send OTP: `{e}`", parse_mode=ParseMode.MARKDOWN)
             sess.clear_state(uid)
 
     elif step == "otp":
         code       = text.replace(" ","")
         phone      = state["phone"]
         phone_hash = state["phone_code_hash"]
+        uc         = state["client"]
 
-        # MUST reuse original client — phone_code_hash is tied to its auth key
-        # Just reconnect it if disconnected
-        uc = state["client"]
+        # Reconnect same client if disconnected — must reuse same client as send_code
         try:
             if not uc.is_connected:
                 await uc.connect()
         except Exception:
-            await uc.connect()
+            try: await uc.connect()
+            except Exception as e:
+                sess.clear_state(uid)
+                await update.message.reply_text(
+                    f"❌  Session lost. Please /login again.",
+                    parse_mode=ParseMode.MARKDOWN,
+                )
+                return
 
         try:
             await uc.sign_in(phone, phone_hash, code)
