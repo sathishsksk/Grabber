@@ -532,11 +532,20 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             return
         status = await update.message.reply_text("⏳  Sending OTP…")
         try:
-            # Create and connect client — keep it ALIVE in global dict
-            uc = Client(f"user_{uid}", api_id=API_ID, api_hash=API_HASH, in_memory=True)
+            uc = Client(
+                f"user_{uid}",
+                api_id=API_ID,
+                api_hash=API_HASH,
+                in_memory=True,
+            )
+            # Initialize storage first — fixes "required argument is not an integer"
+            # which happens because dc_id is None on fresh in_memory client
+            await uc.storage.open()
+            await uc.storage.dc_id(2)
+            await uc.storage.api_id(API_ID)
+            await uc.storage.test_mode(False)
             await uc.connect()
             sent = await uc.send_code(text)
-            # Store live client in global dict — NOT in state (avoids serialization)
             login_clients[uid] = uc
             sess.set_state(uid, {
                 "step":            "otp",
@@ -560,9 +569,7 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         code       = text.replace(" ", "")
         phone      = state["phone"]
         phone_hash = state["phone_code_hash"]
-
-        # Get the live client from global dict — same auth key guaranteed
-        uc = login_clients.get(uid)
+        uc         = login_clients.get(uid)
         if not uc:
             sess.clear_state(uid)
             await update.message.reply_text(
@@ -570,11 +577,8 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 parse_mode=ParseMode.MARKDOWN,
             )
             return
-
-        # Reconnect if dropped
         if not uc.is_connected:
             await uc.connect()
-
         try:
             await uc.sign_in(phone, phone_hash, code)
             final_session = await uc.export_session_string()
@@ -590,12 +594,12 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 parse_mode=ParseMode.MARKDOWN,
             )
         except SessionPasswordNeeded:
+            login_clients[uid] = uc
             sess.set_state(uid, {
-                "step": "2fa",
-                "phone": phone,
+                "step":            "2fa",
+                "phone":           phone,
                 "phone_code_hash": phone_hash,
             })
-            login_clients[uid] = uc
             await update.message.reply_text(
                 "🔐  *2FA Required*\nSend your Telegram 2FA password:",
                 parse_mode=ParseMode.MARKDOWN,
@@ -617,10 +621,8 @@ async def handle_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 parse_mode=ParseMode.MARKDOWN,
             )
             return
-
         if not uc.is_connected:
             await uc.connect()
-
         try:
             await uc.check_password(text)
             final_session = await uc.export_session_string()
